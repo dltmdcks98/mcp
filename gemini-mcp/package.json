@@ -1,0 +1,21 @@
+{
+  "name": "gemini-mcp",
+  "version": "1.0.0",
+  "description": "Gemini CLI-backed MCP HTTP server",
+  "main": "server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "gemini",
+    "modelcontextprotocol"
+  ],
+  "author": "iseungchan",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "express": "^4.21.0"
+  }
+}
