@@ -6,14 +6,13 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
-const MCP_NAME = 'antigravity-mcp';
-const MCP_VERSION = '0.1.0';
-const DEFAULT_MODEL = 'auto';
+const MCP_VERSION = '0.2.0';
 const GEMINI_CMD = process.env.GEMINI_CLI_BIN || 'gemini';
+const GEMINI_DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL || 'auto';
+const ANTIGRAVITY_DEFAULT_MODEL = process.env.ANTIGRAVITY_DEFAULT_MODEL || 'auto';
 
 function runGeminiCli(args) {
   return new Promise((resolve, reject) => {
-    // stdio: ['ignore', 'pipe', 'pipe'] to avoid interactive prompts and capture output
     const proc = spawn(GEMINI_CMD, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let out = '';
@@ -41,16 +40,13 @@ function runGeminiCli(args) {
   });
 }
 
-function createAntigravityMcpServer() {
-  const server = new McpServer(
-    { name: MCP_NAME, version: MCP_VERSION },
-    { capabilities: { tools: {} } }
-  );
+function createVariantServer({ name, defaultModel }) {
+  const server = new McpServer({ name, version: MCP_VERSION }, { capabilities: { tools: {} } });
 
   server.registerTool(
     'gemini.generate',
     {
-      description: 'Call Gemini CLI with a prompt and optional model/output_format',
+      description: `Call Gemini CLI via ${name} with prompt/model/output_format`,
       inputSchema: {
         prompt: z.string(),
         model: z.string().optional(),
@@ -58,7 +54,7 @@ function createAntigravityMcpServer() {
       },
     },
     async ({ prompt, model, output_format: outputFormat }) => {
-      const targetModel = model || DEFAULT_MODEL;
+      const targetModel = model || defaultModel;
       const format = outputFormat || 'text';
       const cliArgs = ['--model', targetModel, '-y'];
 
@@ -68,46 +64,37 @@ function createAntigravityMcpServer() {
 
       cliArgs.push('--prompt', prompt);
 
-      let stdout;
       try {
-        stdout = await runGeminiCli(cliArgs);
+        const stdout = await runGeminiCli(cliArgs);
+
+        if (format === 'json') {
+          try {
+            return { content: [{ type: 'json', json: JSON.parse(stdout) }] };
+          } catch {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `Failed to parse Gemini JSON output. Raw output:\n${stdout}` }],
+            };
+          }
+        }
+
+        return { content: [{ type: 'text', text: stdout.trim() }] };
       } catch (error) {
         return {
           isError: true,
           content: [{ type: 'text', text: `Gemini CLI call failed: ${error.message}` }],
         };
       }
-
-      if (format === 'json') {
-        try {
-          return { content: [{ type: 'json', json: JSON.parse(stdout) }] };
-        } catch {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `Failed to parse Gemini JSON output. Raw output:\n${stdout}`,
-              },
-            ],
-          };
-        }
-      }
-
-      return { content: [{ type: 'text', text: stdout.trim() }] };
     }
   );
 
   return server;
 }
 
-async function start() {
-  const port = Number(process.env.PORT || 8765);
-  const host = process.env.HOST || '127.0.0.1';
-  const app = createMcpExpressApp({ host });
+function mountMcpRoute(app, routePath, variantOptions) {
   const sessions = Object.create(null);
 
-  app.post('/mcp', async (req, res) => {
+  app.post(routePath, async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'];
       let transport;
@@ -115,7 +102,7 @@ async function start() {
       if (typeof sessionId === 'string' && sessions[sessionId]) {
         transport = sessions[sessionId].transport;
       } else if (!sessionId && isInitializeRequest(req.body)) {
-        const server = createAntigravityMcpServer();
+        const server = createVariantServer(variantOptions);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
@@ -124,10 +111,7 @@ async function start() {
         });
 
         transport.onclose = async () => {
-          if (!transport.sessionId || !sessions[transport.sessionId]) {
-            return;
-          }
-
+          if (!transport.sessionId || !sessions[transport.sessionId]) return;
           const closingServer = sessions[transport.sessionId].server;
           delete sessions[transport.sessionId];
           await closingServer.close().catch(() => {});
@@ -137,10 +121,7 @@ async function start() {
       } else {
         res.status(400).json({
           jsonrpc: '2.0',
-          error: {
-            code: -32000,
-            message: 'Bad Request: No valid session ID provided',
-          },
+          error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
           id: null,
         });
         return;
@@ -148,21 +129,18 @@ async function start() {
 
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
-      console.error('Error handling MCP request:', error);
+      console.error(`Error handling MCP request (${routePath}):`, error);
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
-          error: {
-            code: -32603,
-            message: 'Internal server error',
-          },
+          error: { code: -32603, message: 'Internal server error' },
           id: null,
         });
       }
     }
   });
 
-  app.get('/mcp', async (req, res) => {
+  app.get(routePath, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (typeof sessionId !== 'string' || !sessions[sessionId]) {
       res.status(400).send('Missing or invalid MCP session ID');
@@ -172,7 +150,7 @@ async function start() {
     await sessions[sessionId].transport.handleRequest(req, res);
   });
 
-  app.delete('/mcp', async (req, res) => {
+  app.delete(routePath, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (typeof sessionId !== 'string' || !sessions[sessionId]) {
       res.status(400).send('Missing or invalid MCP session ID');
@@ -180,24 +158,49 @@ async function start() {
     }
 
     await sessions[sessionId].transport.handleRequest(req, res);
+  });
+}
+
+async function start() {
+  const port = Number(process.env.PORT || 8765);
+  const host = process.env.HOST || '127.0.0.1';
+  const app = createMcpExpressApp({ host });
+
+  mountMcpRoute(app, '/mcp/gemini', {
+    name: 'gemini-mcp',
+    defaultModel: GEMINI_DEFAULT_MODEL,
+  });
+
+  mountMcpRoute(app, '/mcp/antigravity', {
+    name: 'antigravity-mcp',
+    defaultModel: ANTIGRAVITY_DEFAULT_MODEL,
   });
 
   app.get('/healthz', (_req, res) => {
     res.json({
       ok: true,
-      name: MCP_NAME,
+      name: 'multi-gemini-mcp',
       version: MCP_VERSION,
-      defaultModel: DEFAULT_MODEL,
       geminiBin: GEMINI_CMD,
+      routes: {
+        gemini: '/mcp/gemini',
+        antigravity: '/mcp/antigravity',
+      },
+      defaultModels: {
+        gemini: GEMINI_DEFAULT_MODEL,
+        antigravity: ANTIGRAVITY_DEFAULT_MODEL,
+      },
     });
   });
 
   app.listen(port, host, () => {
-    console.log(`${MCP_NAME} listening on http://${host}:${port}/mcp`);
+    console.log(`multi-gemini-mcp listening on http://${host}:${port}`);
+    console.log(`- gemini route: http://${host}:${port}/mcp/gemini`);
+    console.log(`- antigravity route: http://${host}:${port}/mcp/antigravity`);
   });
 }
 
 start().catch((error) => {
-  console.error('Failed to start Antigravity MCP server:', error);
+  console.error('Failed to start multi-gemini-mcp server:', error);
   process.exit(1);
 });
