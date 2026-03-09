@@ -1,0 +1,21 @@
+{
+  "name": "antigravity-mcp",
+  "version": "1.0.0",
+  "description": "Antigravity MCP server backed by Gemini CLI",
+  "main": "server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "gemini",
+    "modelcontextprotocol"
+  ],
+  "author": "iseungchan",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "express": "^4.21.0"
+  }
+}
