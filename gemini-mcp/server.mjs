@@ -80,7 +80,15 @@ function createGeminiMcpServer() {
 
       if (format === 'json') {
         try {
-          return { content: [{ type: 'json', json: JSON.parse(stdout) }] };
+          const parsed = JSON.parse(stdout);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(parsed),
+              },
+            ],
+          };
         } catch {
           return {
             isError: true,
