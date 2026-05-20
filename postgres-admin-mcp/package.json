@@ -1,0 +1,17 @@
+{
+  "name": "postgres-admin-mcp",
+  "version": "0.1.0",
+  "description": "Local PostgreSQL administration MCP server for Hermes",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "test": "node --test",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "pg": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {}
+}
